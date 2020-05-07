@@ -253,12 +253,44 @@ for directory in ${directories[@]}; do
   fi
 done
 
+#### Pool all the reads into their respective dna_libararies
+
 module load SAMtools
 
-aligned_reads_dir="/home/kh593/scratch60/nfkb_seq/aligned_reads"
-data_dir="/home/kh593/scratch60/downsample2/data/temp"
 
-index="/home/kh593/project/downsample2/docs/master_index.tsv"
+index="/home/kh593/project/nfkb_seq/data/pooling_index.tsv"
+
+
+### Merge sequencing runs into a single library per donor/treatment combo.
+cut -f1,2,3,4 $index | sort | uniq | grep -v "donor" > t0
+
+while read donor expt stim lib
+do
+copas=$(grep "${donor}" $index |
+grep "${expt}" | 
+grep "${stim}" |
+cut -f5 |
+sed "s/$/.final.bam/g" |
+sed "s/^/\/home\/kh593\/scratch60\/nfkb_seq\/aligned_reads\//g")
+echo "${donor} ${expt} ${stim} ${lib}"
+echo $copas
+    
+samtools merge -@ 8 ${pooled_dir}/${lib}_pooled.bam $copas
+echo "${donor} ${stim} done"
+done < t0
+
+rm t0
+
+mv *_pooled.bam pooled
+
+for file in pooled/*_pooled.bam
+do
+    echo $file
+    samtools view -@ 8 -c $file
+done
+
+
+
 
 
 
