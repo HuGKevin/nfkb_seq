@@ -12,7 +12,7 @@
 input_file="${1}"
 file_id=$(basename ${input_file} .bam)
 pval_thresh="0.01"
-genome_sizes="/home/kh593/project/genomes/hg38/hg38_no_alt.chrom.sizes"
+genome_sizes="/home/kh593/project/genomes/hg38/hg38_principal.chrom.sizes"
 
 ## Intermediate filenames
 bpeakfile="${file_id}.broadPeaks.gz"

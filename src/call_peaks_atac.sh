@@ -12,7 +12,7 @@
 input_file="${1}"
 file_id=$(basename ${input_file} .bam)
 pval_thresh="0.01"
-genome_sizes="/home/kh593/project/genomes/hg38/hg38_no_alt.chrom.sizes"
+genome_sizes="/home/kh593/project/genomes/hg38/hg38_principal.chrom.sizes"
 
 ## Filenames
 npeakfile="${file_id}.narrowPeaks.gz"
@@ -33,8 +33,6 @@ macs2 callpeak \
 macs2 callpeak \
       -t $input_file -f BAMPE -n $file_id -p $pval_thresh \
       --nomodel --broad --keep-dup all
-
-### Add identifiers to peaks.
 
 ### Sort peaks and compress them
 ## narrow
