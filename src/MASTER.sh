@@ -263,7 +263,7 @@ sbatch /home/kh593/project/nfkb_seq/src/downsample.sh
 
 ### Do peak calling
 
-
+sbatch /home/kh593/project/nfkb_seq/src/peak_call.sh
 
 
 # Parameters

@@ -1,12 +1,12 @@
 #!/bin/bash
 
 #SBATCH --partition=general
-#SBATCH --job-name=call_peaks.%a
-#SBATCH --cpus-per-task=8
+#SBATCH --job-name=call_peaks_%a
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=10gb
 #SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/call_peaks%a.out
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/call_peaks%a.err
-#SBATCH --array=1
+#SBATCH --array=1-427
 
 module purge
 module load miniconda
@@ -24,11 +24,12 @@ stim=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num
 lib=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=4 'FNR == row {print $num}' $index_file)
 
 ### Relevant directories
-scratch_dir="/home/kh593/nfkb_seq"
+scratch_dir="/home/kh593/scratch60/nfkb_seq"
 reads_dir="${scratch_dir}/downsampled"
 results_dir="${scratch_dir}/results"
 peakcall_dir="${results_dir}/peak_call"
 bigwig_dir="${peakcall_dir}/bigwigs"
+bedgraph_dir="${peakcall_dir}/bdgs"
 summits_dir="${peakcall_dir}/summits"
 atac_dir="${peakcall_dir}/beds/atac"
 mint_dir="${peakcall_dir}/beds/mint"
@@ -61,6 +62,16 @@ then
 else
     echo "Invalid experiment type"
     exit 999
+fi
+
+if [ -f "${lib}_FE.bdg" ]
+then
+    mv ${lib}_FE.bdg ${bedgraph_dir}
+fi
+
+if [ -f "${lib}_ppois.bdg" ]
+then
+    mv ${lib}_ppois.bdg ${bedgraph_dir}
 fi
 
 echo "Peak calling complete"
