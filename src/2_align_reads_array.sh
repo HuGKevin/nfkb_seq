@@ -3,8 +3,8 @@
 #SBATCH --partition=general
 #SBATCH --job-name=align_reads%a
 #SBATCH --cpus-per-task=16 --mem=32gb
-#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/%a.out
-#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/%a.err
+#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/align_reads%a.out
+#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/align_reads%a.err
 #SBATCH --array=2
 
 ################################################################################
@@ -36,18 +36,6 @@ alignment_dir="${scratch_dir}/aligned_reads"
 alignment_stats_dir="${scratch_dir}/alignment_stats"
 qc_stats_dir="${scratch_dir}/qc_stats"
 
-# Create any missing directories:
-directories=( $base_dir $data_dir $src_dir $scratch_dir \
-			$logs_dir $doc_dir $slurm_dir $pretrim_qc_dir \
-			$posttrim_qc_dir $trimmed_reads_dir $alignment_dir $alignment_stats_dir \
-			$qc_stats_dir $results_dir )
-for directory in ${directories[@]}; do
-    if [ ! -d $directory ]; then
-	echo "Cannot find ${directory}"
-	missing=1
-    fi
-done
-
 # The sample table:
 file_index="${base_dir}/data/file_index.csv"
 
@@ -73,32 +61,32 @@ fi
 
 # Clear out environment of node and load conda environment
 module purge
-module load miniconda
+module load miniconda/4.8.2
 source activate atac_env
 
 # Load additional necessary packages
-module load SAMtools
-module load picard
-module load FastQC
-module load Bowtie2
+module load SAMtools/1.9-foss-2018b
+module load picard/2.9.0-Java-1.8.0_121
+module load FastQC/0.11.7-Java-1.8.0_121
+module load Bowtie2/2.3.4.2-foss-2018b
 
 # Extract relevant arguments from the table
-fid=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $index_file)
-R1=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $index_file)
-R2=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num}' $index_file)
-expt=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=4 'FNR == row {print $num}' $index_file)
+fid=$(awk -F',' -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $file_index)
+R1=$(awk -F',' -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $file_index)
+R2=$(awk -F',' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num}' $file_index)
+expt=$(awk -F',' -v row=${SLURM_ARRAY_TASK_ID} -v num=4 'FNR == row {print $num}' $file_index)
 
 # Intermediate files
-fastq1_trim=${trimmed_reads_dir}/`echo $R1 | sed 's/.fastq.gz/.trim.fastq.gz/'`
-fastq2_trim=${trimmed_reads_dir}/`echo $R2 | sed 's/.fastq.gz/.trim.fastq.gz/'`
-aligned_file=${alignment_dir}/${fid}.bam
-alignment_stats_file=${alignment_stats_dir}/${fid}.alignment.stats.txt
-duplicate_log=${logs_dir}/${fid}.atac.duplicates.log
-filtered_file=${alignment_dir}/${fid}.filtered.bam
-nodup_file=${alignment_dir}/${fid}.nodup.bam
-shifted_file=${alignment_dir}/${fid}.shifted.bam
-final_file=${alignment_dir}/${fid}.final.bam
-final_alignment_stats=${alignment_stats_dir}/${fid}.final.alignment.stats.txt
+fastq1_trim="${trimmed_reads_dir}/`echo $R1 | sed 's/.fastq.gz/.trim.fastq.gz/'`"
+fastq2_trim="${trimmed_reads_dir}/`echo $R2 | sed 's/.fastq.gz/.trim.fastq.gz/'`"
+aligned_file="${alignment_dir}/${fid}.bam"
+alignment_stats_file="${alignment_stats_dir}/${fid}.alignment.stats.txt"
+duplicate_log="${logs_dir}/${fid}.atac.duplicates.log"
+filtered_file="${alignment_dir}/${fid}.filtered.bam"
+nodup_file="${alignment_dir}/${fid}.nodup.bam"
+shifted_file="${alignment_dir}/${fid}.shifted.bam"
+final_file="${alignment_dir}/${fid}.final.bam"
+final_alignment_stats="${alignment_stats_dir}/${fid}.final.alignment.stats.txt"
  
 ################################################################################
 ##########################   Section 2: Align Reads   ##########################
