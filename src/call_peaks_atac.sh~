@@ -76,7 +76,7 @@ then
     rm -f ${FE_bedgraph}
 fi
 
-if [ -f "${Pval_bigwig}" ]
+fi [ -f "${Pval_bigwig}" ]
 then
     rm -f ${Pval_bedgraph}
 fi
