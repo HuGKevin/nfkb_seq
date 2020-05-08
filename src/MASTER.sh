@@ -255,8 +255,9 @@ done
 
 #### Pool all the reads into their respective dna_libararies
 
-module load SAMtools
 
+
+module load SAMtools
 
 index="/home/kh593/project/nfkb_seq/data/pooling_index.tsv"
 
