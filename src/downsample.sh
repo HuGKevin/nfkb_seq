@@ -2,8 +2,8 @@
 
 #SBATCH --partition=general
 #SBATCH --job-name=downsample_reads.%a
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=20gb
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=10gb
 #SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/downsample_reads%a.out
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/downsample_reads%a.err
 #SBATCH --array=1-453
@@ -24,7 +24,7 @@ fullset="/home/kh593/scratch60/nfkb_seq/pooled_reads/${lib}_pooled.bam"
 output="/home/kh593/scratch60/nfkb_seq/downsampled/${lib}.bam"
 
 # compute total reads
-total_reads=$(samtools view -@ 16 -c ${fullset})
+total_reads=$(samtools view -@ 8 -c ${fullset})
 
 # compute fraction of reads given an input read depth
 frac=$(awk -v down=$target_depth -v full=$total_reads 'BEGIN {frac=down/full;
