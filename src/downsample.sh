@@ -4,9 +4,9 @@
 #SBATCH --job-name=downsample_reads.%a
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=20gb
-#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/pool_reads%a.out
-#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/pool_reads%a.err
-#SBATCH --array=453
+#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/downsample_reads%a.out
+#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/downsample_reads%a.err
+#SBATCH --array=1-453
 
 module purge
 module load SAMtools
