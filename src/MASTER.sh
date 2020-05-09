@@ -265,47 +265,24 @@ sbatch /home/kh593/project/nfkb_seq/src/downsample.sh
 
 sbatch /home/kh593/project/nfkb_seq/src/peak_call.sh
 
+### Run MCL on each set of experiments
+mcl_dir="${scratch_dir}/results/MCL"
+atac_dir="${mcl_dir}/atac"
+mint_dir="${mcl_dir}/mint"
 
-# Parameters
-qval="0.1"
+gunzip /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/atac/*.gz
 
-while read Uid Donor Stim BioSam CoPA R1 R2
-do 
-  # Skip the header row and any samples that are not sequenced:
-    [ $Uid == "UID" ] && continue
-    echo $Uid
-  ([ $R1 == "NA" ] || [ $R2 == "NA" ]) && continue
+for file in /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/atac/*.narrowPeaks
+do
+    base=$(basename "${file}" .narrowPeaks)
 
-  echo -n "Processing peaks for sample ${Uid}..."
+    sed -i -e "s/Peak_\([0-9]*\)/Peak_${base}_\1/g" ${file}
+done
 
-    # Make sure both input files exist and that analysis hasn't been done yet
-  if [ ! -f ${R1_dir}/${R1} ] || [ ! -f ${R2_dir}/${R2} ]; then
-      echo "could not find both input files; skipping."
-      continue
-  else
-      echo "creating Slurm script."
-  fi
+cat /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/atac/*.narrowPeaks > ${atac_dir}/mcl_compiled.bed
 
-  # The script output file:
-  output_script="${slurm_dir}/${Uid}"
+bedSort ${atac_dir}/mcl_compiled.bed ${atac_dir}/mcl_compiled.bed
+awk '{print $0 >> $1".bed"}' ${atac_dir}/mcl_compiled.bed
+mv chr*.bed ${atac_dir}
 
-  # Intermediate files:
-  aligned_reads="${alignment_dir}/${Uid}.final.bam"
-
-  echo \
-"#!/bin/bash
-#SBATCH --partition=general
-#SBATCH --job-name=${Uid}.peak.call
-#SBATCH --ntasks=1
-#SBATCH -o ${logs_dir}/${Uid}.peaks.out
-#SBATCH -e ${logs_dir}/${Uid}.peaks.err
-
-# Load required modules
-module load MACS2
-
-macs2 callpeak -t $aligned_reads -n ${Uid} -g hs -q $qval --outdir ${peaks_dir}
-
-macs2 callpeak -t $aligned_reads -n ${Uid}_bampe -g hs -f BAMPE -q $qval --outdir ${peaks_dir}" > ${output_script}.call.peaks.slurm
-
-done < $sample_table
-
+sbatch /home/kh593/project/nfkb_seq/src/mcl.sh
