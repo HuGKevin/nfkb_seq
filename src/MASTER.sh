@@ -286,3 +286,23 @@ awk '{print $0 >> $1".bed"}' ${atac_dir}/mcl_compiled.bed
 mv chr*.bed ${atac_dir}
 
 sbatch /home/kh593/project/nfkb_seq/src/mcl.sh
+
+gunzip /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/mint/*broadPeaks.gz
+
+for file in /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/mint/*.broadPeaks
+do
+    base=$(basename "${file}" .broadPeaks)
+
+    sed -i -e "s/Peak_\([0-9]*\)/Peak_${base}_\1/g" ${file}
+done
+
+cat /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/mint/*.broadPeaks > ${mint_dir}/mcl_compiled.bed
+
+bedSort ${mint_dir}/mcl_compiled.bed ${mint_dir}/mcl_compiled.bed
+awk '{print $0 >> $1".bed"}' ${mint_dir}/mcl_compiled.bed
+mv chr*.bed ${mint_dir}
+
+sbatch /home/kh593/project/nfkb_seq/src/mcl.sh
+
+### Bind cluster output from MCL
+sbatch /home/kh593/project/nfkb_seq/src/bind_clusters.sh
