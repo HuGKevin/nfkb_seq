@@ -306,3 +306,6 @@ sbatch /home/kh593/project/nfkb_seq/src/mcl.sh
 
 ### Bind cluster output from MCL
 sbatch /home/kh593/project/nfkb_seq/src/bind_clusters.sh
+
+### Generate binding profile for each DNA library
+
