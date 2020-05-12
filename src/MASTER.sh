@@ -308,4 +308,4 @@ sbatch /home/kh593/project/nfkb_seq/src/mcl.sh
 sbatch /home/kh593/project/nfkb_seq/src/bind_clusters.sh
 
 ### Generate binding profile for each DNA library
-
+Rscript /home/kh593/project/nfkb_seq/src/peak_matrix.R
