@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# MASTER.sh
+# MINT_MASTER.sh
 #
-# The main ATAC-seq processing scripts for NFKB ATAC-seq project. 
+# The main MintChIP  processing scripts for NFKB MintChIP project. 
 #
 # As currently configured, this script runs on Farnam.
 #
@@ -11,7 +11,7 @@
 #   2. QC of raw reads with FastQC
 #   3. Adapter trimming with pyadapter_trim.py
 #   4. QC of trimmed reads with FastQC
-#   5. Alignment of trimmed reads with HISAT2
+#   5. Alignment of trimmed reads with Bowtie2
 #   6. Compilation of alignment summary statistics by Picard tools
 #   7. Filtering to include only singly mapped reads mapped to primary assembly
 #   8. Filtering to remove optical duplicates
@@ -88,153 +88,66 @@ fi
 ##########################   Section 2: Align Reads   ##########################
 ################################################################################
 
-# This section submits multiple slurm scripts for QC and alignment.
-
-# Get length of file index (assuming it has header)
-projsize=$(wc -l ${sample_table} | cut -f1 -d" ")
-
-echo "Creating alignment job submission script."
-
-  echo \
-"#!/bin/bash
+############ TRIM ADAPTERS #############
+#!/bin/bash
 
 #SBATCH --partition=general
-#SBATCH --job-name=align_reads%a
-#SBATCH --cpus-per-task=16 --mem=32gb
-#SBATCH -o ${logs_dir}/%a.out
-#SBATCH -e ${logs_dir}/%a.err
-#SBATCH --array=2-${projsize}
+#SBATCH --job-name=trim_mint%a
+#SBATCH --cpus-per-task=1 --mem=15gb
+#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/trim_mint%a.out
+#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/trim_mint%a.err
+#SBATCH --array=2
 
 # Clear out environment of node and load conda environment
 module purge
 module load miniconda
 source activate atac_env
-
-# Load additional necessary packages
-module load SAMtools
-module load Biopython
-module load Python
-module load picard
-module load FastQC
-module load Bowtie2
+echo "conda environment activated"
+python --version
 
 # File with metadata job array
-index_file=${sample_table}
+index_file=/home/kh593/project/nfkb_seq/data/mint_copa.tsv
 
 # Extract relevant arguments from the table
-fid=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $index_file)
-R1=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $index_file)
-R2=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num}' $index_file)
-expt=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=4 'FNR == row {print $num}' $index_file)
+donor=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $index_file)
+expt=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $index_file)
+stim=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num}' $index_file)
+dnalib=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=4 'FNR == row {print $num}' $index_file)
+copa=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=5 'FNR == row {print $num}' $index_file)
+
+# Relevant directories
+data_dir="/home/kh593/scratch60/nfkb_data/MintChIP"
+src_dir="/home/kh593/project/nfkb_seq/src"
+trimmed_reads_dir="/home/kh593/scratch60/nfkb_seq/trimmed_reads/mint"
 
 # Intermediate files
-fastq1_trim=${trimmed_reads_dir}/`echo $R1 | sed 's/.fastq.gz/.trim.fastq.gz/'`
-fastq2_trim=${trimmed_reads_dir}/`echo $R2 | sed 's/.fastq.gz/.trim.fastq.gz/'`
-aligned_file=${alignment_dir}/${fid}.bam
-alignment_stats_file=${alignment_stats_dir}/${fid}.alignment.stats.txt
-duplicate_log=${logs_dir}/${fid}.atac.duplicates.log
-filtered_file=${alignment_dir}/${fid}.filtered.bam
-nodup_file=${alignment_dir}/${fid}.nodup.bam
-shifted_file=${alignment_dir}/${fid}.shifted.bam
-final_file=${alignment_dir}/${fid}.final.bam
-final_alignment_stats=${alignment_stats_dir}/${fid}.final.alignment.stats.txt
+fastq1_trim="${trimmed_reads_dir}/${copa}_R1.trim.fastq.gz"
+fastq2_trim="${trimmed_reads_dir}/${copa}_R2.trim.fastq.gz"
  
+# Trim adapter sequences:
+python ${src_dir}/pyadapter_trim.py -a ${data_dir}/${copa}_R1.fastq.gz -b ${data_dir}/${copa}_R2.fastq.gz
+
+mv ${copa}_R1.trim.fastq.gz ${trimmed_reads_dir}
+mv ${copa}_R2.trim.fastq.gz ${trimmed_reads_dir}
+
+echo "Adapters trimmed for ${copa}"
+
+echo "Modules listed below for reference"
+
+module list
+#########################
+
+### Below FastQC is optional
 # Perform QC testing on raw reads with FastQC:
-fastqc ${data_dir}/${expt}/${R1} \\
-       ${data_dir}/${expt}/${R2} \\
-       --outdir=$pretrim_qc_dir \\
-       --threads=16
+fastqc ${data_dir}/${R1} ${data_dir}/${R2} --outdir=$pretrim_qc_dir/atac --threads=16
 
 echo 'Raw QC Completed'
 
-# Trim adapter sequences:
-python ${src_dir}/pyadapter_trim.py \\
--a ${data_dir}/${expt}/${R1} \\
--b ${data_dir}/${expt}/${R2}
-       mv `echo $R1 | sed 's/.fastq.gz/.trim.fastq.gz/'` \\
-       $trimmed_reads_dir
-       mv `echo $R2 | sed 's/.fastq.gz/.trim.fastq.gz/'` \\
-       $trimmed_reads_dir
-       echo 'Adapters trimmed'
-
 # Perform QC testing on trimmed reads with FastQC:       
-fastqc $fastq1_trim \\
-       $fastq2_trim \\
-       --outdir=$posttrim_qc_dir
+fastqc $fastq1_trim $fastq2_trim --outdir=$posttrim_qc_dir
 echo 'Post-trim QC completed'
 
-# Align reads with Bowtie2:
-bowtie2 -p 16 -x $bt2_index \\
-       -1 $fastq1_trim \\
-       -2 $fastq2_trim | \\
-  samtools sort -o $aligned_file -@ 16 -
-samtools index $aligned_file
-echo 'Reads aligned'
 
-# Compile alignment statistics:
-java -jar \$EBROOTPICARD/picard.jar \\
-          CollectAlignmentSummaryMetrics \\
-          R=$genome_seq \\
-          I=$aligned_file \\
-          O=$alignment_stats_file
-	  echo 'Alignment stats compiled'
-
-# Filter reads for quality, both ends properly mapped, and from principal assembly:
-samtools view -q 30 -f 0x2 -h -@ 16 \\
-  $aligned_file \\
-  chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 \\
-  chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY | \\
-  samtools sort -o $filtered_file -@ 16 -
-samtools index $filtered_file
-
-# Remove precursor files
-if [ -f $sorted_aligned_file_filtered ]; then
-  rm $sorted_aligned_file
-  rm ${sorted_aligned_file}.bai
-fi
-
-echo 'Reads filtered on quality, mapping, and source'
-
-# Remove duplicate reads:
-java -jar \$EBROOTPICARD/picard.jar \\
-          MarkDuplicates \\
-          I=$filtered_file \\
-          O=$nodup_file \\
-          M=$duplicate_log \\
-          REMOVE_DUPLICATES=TRUE VALIDATION_STRINGENCY=SILENT
-samtools index $nodup_file
-
-# Remove precursor files
-if [ -f $sorted_aligned_file_nodup ]; then
-  rm $sorted_aligned_file_filtered
-  rm ${sorted_aligned_file_filtered}.bai
-fi
-
-echo 'Duplicate reads removed'
-
-# Call shift_reads.py to shift read cut sites:
-python ${src_dir}/shift_reads.py -o $shifted_file \\
-  $nodup_file
-samtools sort -o $final_file -@ 16 $shifted_file
-samtools index $final_file
-
-# Remove precursor files
-if [ -f $sorted_aligned_file_shifted ]; then
-  rm $sorted_aligned_file_nodup
-  rm ${sorted_aligned_file_nodup}.bai
-fi
-echo 'Read cut sites shifted'
-
-# Compile alignment statistics on shifted reads:
-java -jar \$EBROOTPICARD/picard.jar \\
-  CollectAlignmentSummaryMetrics \\
-  R=$genome_seq \\
-  I=$final_file \\
-  O=$final_alignment_stats
-echo 'Shifted reads alignment stats compiled'" > ${slurm_dir}/2_align_reads_array.sh
-
-echo "Alignment job submission script created."
-  
 ################################################################################
 ###########################   Section 3: Find Peaks   ##########################
 ################################################################################
