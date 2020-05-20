@@ -270,31 +270,138 @@ echo 'Shifted reads alignment stats compiled'
 ###########################   Section 3: Find Peaks   ##########################
 ################################################################################
 
-# Directories we need
-peaks_dir="${scratch_dir}/indiv_peaks"
-consensus_dir="${scratch_dir}/cons_peaks"
-pooled_dir="${scratch_dir}/pooled_reads"
+################## Downsample and call peaks #################
+#!/bin/bash
 
-# Create any missing directories:
-directories=( $peaks_dir $consensus_dir )
-for directory in ${directories[@]}; do
-  if [ ! -d $directory ]; then
-    echo "Creating directory ${directory}"
-    mkdir -p $directory
-  fi
-done
+#SBATCH --partition=general
+#SBATCH --job-name=peakcall_atac%a
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=15gb
+#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/peakcall_atac%a.out
+#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/peakcall_atac%a.err
+#SBATCH --array=1-183
 
-#### Pool all the reads into their respective dna_libararies
+echo "Job ID: ${SLURM_JOB_ID}"
+echo "Array ID: ${SLURM_JOB_ARRAY_ID}"
 
-sbatch /home/kh593/project/nfkb_seq/src/pool_reads.sh
+module purge
+module load SAMtools
+module load MACS2
 
-### Downsample to 30000000 reads
+index_file="/home/kh593/project/nfkb_seq/data/atac_libs.tsv"
 
-sbatch /home/kh593/project/nfkb_seq/src/downsample.sh
+### job information
+donor=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $index_file)
+expt=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $index_file)
+stim=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num}' $index_file)
+lib=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=4 'FNR == row {print $num}' $index_file)
 
-### Do peak calling
+# Intermediate files and directories
+scratch_dir="/home/kh593/scratch60/nfkb_seq"
+reads_dir="${scratch_dir}/aligned_reads"
+peaks_dir="${scratch_dir}/peaks"
+fullset="/home/kh593/scratch60/nfkb_seq/aligned_reads/${lib}.final.bam"
+downsample="/home/kh593/scratch60/nfkb_seq/aligned_reads/${lib}.down.bam"
+npeakfile="${peaks_dir}/${lib}.narrowPeaks.gz"
+bpeakfile="${peaks_dir}/${lib}.broadPeaks.gz"
+gpeakfile="${peaks_dir}/${lib}.gappedPeaks.gz"
+FE_bedgraph="${lib}_FE.bdg"
+Pval_bedgraph="${lib}_ppois.bdg"
+FE_bigwig="${peaks_dir}/${lib}_FE.bigwig"
+Pval_bigwig="${peaks_dir}/${lib}_ppois.bigwig"
 
-sbatch /home/kh593/project/nfkb_seq/src/peak_call.sh
+# Necessary variables and files
+target_depth=30000000
+pval_thresh="0.01"
+genome_sizes="/home/kh593/project/genomes/hg38/hg38_principal.chrom.sizes"
+
+# compute total reads
+total_reads=$(samtools view -@ 8 -c ${fullset})
+
+# compute fraction of reads given an input read depth
+frac=$(awk -v down=$target_depth -v full=$total_reads 'BEGIN {frac=down/full;
+if (frac > 1) {print 1} else {print frac}}')	  
+
+# samtools view to downsample
+if [ $frac -eq 1 ]
+then
+    echo "${lib} doesn't exceed downsample threshold"
+    exit 25
+else
+    samtools view -@ 8 -bs $frac $fullset > $downsample
+    samtools index $downsample
+fi
+
+# Peak call atac-seq peaks using narrowpeaks from MACS2
+### Call narrow peaks
+macs2 callpeak \
+      -t $downsample -f BAMPE -n $lib -p $pval_thresh \
+      --nomodel -B --SPMR --keep-dup all --call-summits
+
+### Call broad peaks
+macs2 callpeak \
+      -t $downsample -f BAMPE -n $lib -p $pval_thresh \
+      --nomodel --broad --keep-dup all
+
+### Sort peaks and compress them
+## narrow
+sort -k 8gr,8gr ${lib}_peaks.narrowPeak | \
+    awk -v id=$lib 'BEGIN{OFS = "\t"}{$4 = id"_peak"NR ; print $0}' | \
+    gzip -c > $npeakfile
+
+## broad
+sort -k 8gr,8gr ${lib}_peaks.broadPeak | \
+    awk -v id=$lib 'BEGIN{OFS = "\t"}{$4 = id"_peak"NR ; print $0}' | \
+    gzip -c > $bpeakfile
+
+## gapped
+sort -k 8gr,8gr ${lib}_peaks.gappedPeak | \
+    awk -v id=$lib 'BEGIN{OFS = "\t"}{$4 = id"_peak"NR ; print $0}' | \
+    gzip -c > $gpeakfile
+
+### Convert peaks to signal tracks
+## Fold enrichment track
+macs2 bdgcmp -t ${lib}_treat_pileup.bdg \
+      -c ${lib}_control_lambda.bdg \
+      --o-prefix ${lib} -m FE
+
+## Poisson pval track
+macs2 bdgcmp -t ${lib}_treat_pileup.bdg \
+      -c ${lib}_control_lambda.bdg \
+      --o-prefix ${lib} -m ppois
+
+## Sort bedgraphs
+bedSort ${FE_bedgraph} ${FE_bedgraph}
+bedSort ${Pval_bedgraph} ${Pval_bedgraph}
+
+### Convert signal tracks to bigwigs
+bedGraphToBigWig ${FE_bedgraph} $genome_sizes $FE_bigwig
+bedGraphToBigWig ${Pval_bedgraph} $genome_sizes $Pval_bigwig
+
+if [ -f "${FE_bigwig}" ] 
+then
+    rm -f ${FE_bedgraph}
+fi
+
+if [ -f "${Pval_bigwig}" ]
+then
+    rm -f ${Pval_bedgraph}
+fi
+
+### Remove unnecessary files
+rm -f ${lib}_peaks.narrowPeak
+rm -f ${lib}_peaks.broadPeak
+rm -f ${lib}_peaks.gappedPeak
+rm -f ${lib}_peaks.xls
+rm -f ${lib}_treat_pileup.bdg
+rm -f ${lib}_control_lambda.bdg
+
+### Move summits to peak dir
+mv ${lib}_summits.bed ${peaks_dir}
+
+#####################################################
+
+########## MARKOV CLUSTERING ON CALLED PEAKS #######################
 
 ### Run MCL on each set of experiments
 mcl_dir="${scratch_dir}/results/MCL"
