@@ -149,14 +149,14 @@ fastqc $fastq1_trim $fastq2_trim --outdir=$posttrim_qc_dir
 echo 'Post-trim QC completed'
 
 
-######## POOL AND ALIGN ############3
+######## POOL AND ALIGN ############
 #!/bin/bash
 
 #SBATCH --partition=general
-#SBATCH --job-name=pool_align%a
-#SBATCH --cpus-per-task=16 --mem=45gb
-#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/pool_align%a.out
-#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/pool_align%a.err
+#SBATCH --job-name=pool_align_atac%a
+#SBATCH --cpus-per-task=16 --mem=7gb
+#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/pool_align_atac%a.out
+#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/pool_align_atac%a.err
 #SBATCH --array=2-183
 
 # Clear out environment of node and load conda environment
@@ -191,12 +191,7 @@ r1_pooled="/home/kh593/scratch60/nfkb_seq/pooled_reads/${lib}_R1_pooled.fastq.gz
 r2_pooled="/home/kh593/scratch60/nfkb_seq/pooled_reads/${lib}_R2_pooled.fastq.gz"
 aligned_file="${alignment_dir}/${lib}.bam"
 alignment_stats_file="${alignment_stats_dir}/${lib}.alignment.stats.txt"
-duplicate_log="${logs_dir}/${lib}.atac.duplicates.log"
 filtered_file="${alignment_dir}/${lib}.filtered.bam"
-nodup_file="${alignment_dir}/${lib}.nodup.bam"
-shifted_file="${alignment_dir}/${lib}.shifted.bam"
-final_file="${alignment_dir}/${lib}.final.bam"
-final_alignment_stats="${alignment_stats_dir}/${lib}.final.alignment.stats.txt"
 
 # Pool R1s and R2s. 
 r1s=$(grep "${lib}" /home/kh593/project/nfkb_seq/data/atac_copa.tsv |
@@ -235,6 +230,52 @@ if [ -f $filtered_file ]; then
 fi
 
 echo 'Reads filtered on quality, mapping, and source'
+#############################################
+
+######## DEDUP AND STATS  ############
+#!/bin/bash
+
+#SBATCH --partition=general
+#SBATCH --job-name=dedup_stats_atac%a
+#SBATCH --cpus-per-task=4 --mem=45gb
+#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/dedup_stats_atac%a.out
+#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/dedup_stats_atac%a.err
+#SBATCH --array=2-183
+
+# Clear out environment of node and load conda environment
+module purge
+
+# Load additional necessary packages
+module load SAMtools
+module load Bowtie2
+module load picard
+
+python --version
+
+# File with metadata job array
+index_file="/home/kh593/project/nfkb_seq/data/atac_libs.tsv"
+bt2_index="/gpfs/ysm/project/cotsapas/kh593/genomes/hg38/Bowtie2_index/hg38_index"
+genome_seq="/gpfs/ysm/project/cotsapas/kh593/genomes/hg38/hg38.fa"
+
+# Extract relevant arguments from the table
+donor=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $index_file)
+expt=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $index_file)
+stim=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num}' $index_file)
+lib=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=4 'FNR == row {print $num}' $index_file)
+
+# Relevant directories
+scratch_dir="/home/kh593/scratch60/nfkb_seq"
+alignment_dir="${scratch_dir}/aligned_reads"
+logs_dir="${scratch_dir}/logs"
+alignment_stats_dir="${scratch_dir}/alignment_stats"
+
+# Intermediate files
+duplicate_log="${logs_dir}/${lib}.atac.duplicates.log"
+filtered_file="${alignment_dir}/${lib}.filtered.bam"
+nodup_file="${alignment_dir}/${lib}.nodup.bam"
+shifted_file="${alignment_dir}/${lib}.shifted.bam"
+final_file="${alignment_dir}/${lib}.final.bam"
+final_alignment_stats="${alignment_stats_dir}/${lib}.final.alignment.stats.txt"
 
 # Remove duplicate reads:
 java -jar $EBROOTPICARD/picard.jar MarkDuplicates I=$filtered_file O=$nodup_file M=$duplicate_log REMOVE_DUPLICATES=TRUE VALIDATION_STRINGENCY=SILENT
@@ -265,6 +306,7 @@ echo 'Read cut sites shifted'
 java -jar $EBROOTPICARD/picard.jar CollectAlignmentSummaryMetrics R=$genome_seq I=$final_file O=$final_alignment_stats
 echo 'Shifted reads alignment stats compiled'
 ###########################################
+
 
 ################################################################################
 ###########################   Section 3: Find Peaks   ##########################
