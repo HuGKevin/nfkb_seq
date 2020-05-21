@@ -147,6 +147,164 @@ echo 'Raw QC Completed'
 fastqc $fastq1_trim $fastq2_trim --outdir=$posttrim_qc_dir
 echo 'Post-trim QC completed'
 
+################# POOL AND ALIGN ##############
+#!/bin/bash
+
+#SBATCH --partition=general
+#SBATCH --job-name=pool_align_mint%a
+#SBATCH --cpus-per-task=16 --mem=20gb
+#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/pool_align_mint%a.out
+#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/pool_align_mint%a.err
+#SBATCH --array=2-174
+
+echo "Job ID: ${SLURM_JOB_ID}"
+echo "Array ID: ${SLURM_JOB_ARRAY_ID}"
+
+# Clear out environment of node and load conda environment
+module purge
+
+# Load additional necessary packages
+module load SAMtools
+module load Bowtie2
+module load picard
+
+python --version
+
+# File with metadata job array
+index_file="/home/kh593/project/nfkb_seq/data/mint_libs.tsv"
+bt2_index="/gpfs/ysm/project/cotsapas/kh593/genomes/hg38/Bowtie2_index/hg38_index"
+genome_seq="/gpfs/ysm/project/cotsapas/kh593/genomes/hg38/hg38.fa"
+
+# Extract relevant arguments from the table
+donor=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $index_file)
+expt=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $index_file)
+stim=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num}' $index_file)
+lib=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=4 'FNR == row {print $num}' $index_file)
+
+# Relevant directories
+scratch_dir="/home/kh593/scratch60/nfkb_seq"
+alignment_dir="${scratch_dir}/aligned_reads"
+logs_dir="${scratch_dir}/logs"
+alignment_stats_dir="${scratch_dir}/alignment_stats"
+
+# Intermediate files
+r1_pooled="/home/kh593/scratch60/nfkb_seq/pooled_reads/${lib}_R1_pooled.fastq.gz"
+r2_pooled="/home/kh593/scratch60/nfkb_seq/pooled_reads/${lib}_R2_pooled.fastq.gz"
+aligned_file="${alignment_dir}/${lib}.bam"
+alignment_stats_file="${alignment_stats_dir}/${lib}.alignment.stats.txt"
+duplicate_log="${logs_dir}/${lib}.mint.duplicates.log"
+filtered_file="${alignment_dir}/${lib}.filtered.bam"
+final_file="${alignment_dir}/${lib}.final.bam"
+final_alignment_stats="${alignment_stats_dir}/${lib}.final.alignment.stats.txt"
+
+if [ -f ${final_file} ]
+then
+    echo "Alignment already completed" 
+    exit 4
+fi
+
+# Pool R1s and R2s. 
+r1s=$(grep "${lib}" /home/kh593/project/nfkb_seq/data/mint_copa.tsv |
+	  cut -f5 |
+	  sed "s/$/_R1.trim.fastq.gz/g" |
+	  sed "s/^/\/home\/kh593\/scratch60\/nfkb_seq\/trimmed_reads\/mint\//g")
+r2s=$(grep "${lib}" /home/kh593/project/nfkb_seq/data/mint_copa.tsv |
+	  cut -f5 |
+	  sed "s/$/_R2.trim.fastq.gz/g" |
+	  sed "s/^/\/home\/kh593\/scratch60\/nfkb_seq\/trimmed_reads\/mint\//g")
+
+cat ${r1s} > ${r1_pooled}
+cat ${r2s} > ${r2_pooled}
+
+echo "${lib} Pooled"
+
+# Align reads with Bowtie2:
+bowtie2 -p 16 -x $bt2_index -1 ${r1_pooled} -2 ${r2_pooled} |
+    samtools sort -o $aligned_file -@ 16 -
+samtools index $aligned_file
+echo 'Reads aligned'
+
+# Compile alignment statistics:
+java -jar $EBROOTPICARD/picard.jar CollectAlignmentSummaryMetrics R=$genome_seq I=$aligned_file O=$alignment_stats_file
+echo 'Alignment stats compiled'
+
+# Filter reads for quality, both ends properly mapped, and from principal assembly:
+samtools view -q 30 -f 0x2 -h -@ 16 $aligned_file chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY |
+    samtools sort -o $filtered_file -@ 16 -
+samtools index $filtered_file
+
+# Remove precursor files
+if [ -f $filtered_file ]; then
+    rm ${aligned_file}
+    rm ${aligned_file}.bai
+fi
+
+echo 'Reads filtered on quality, mapping, and source'
+######################################################
+
+################# DEDUP AND STATS ##############
+#!/bin/bash
+
+#SBATCH --partition=general
+#SBATCH --job-name=dedup_stats_mint%a
+#SBATCH --cpus-per-task=1 --mem=50gb
+#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/dedup_stats_mint%a.out
+#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/dedup_stats_mint%a.err
+#SBATCH --array=2-174
+
+echo "Job ID: ${SLURM_JOB_ID}"
+echo "Array ID: ${SLURM_JOB_ARRAY_ID}"
+
+# Clear out environment of node and load conda environment
+module purge
+
+# Load additional necessary packages
+module load SAMtools
+module load Bowtie2
+module load picard
+
+python --version
+
+# File with metadata job array
+index_file="/home/kh593/project/nfkb_seq/data/mint_libs.tsv"
+bt2_index="/gpfs/ysm/project/cotsapas/kh593/genomes/hg38/Bowtie2_index/hg38_index"
+genome_seq="/gpfs/ysm/project/cotsapas/kh593/genomes/hg38/hg38.fa"
+
+# Extract relevant arguments from the table
+donor=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $index_file)
+expt=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $index_file)
+stim=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num}' $index_file)
+lib=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=4 'FNR == row {print $num}' $index_file)
+
+# Relevant directories
+scratch_dir="/home/kh593/scratch60/nfkb_seq"
+alignment_dir="${scratch_dir}/aligned_reads"
+logs_dir="${scratch_dir}/logs"
+alignment_stats_dir="${scratch_dir}/alignment_stats"
+
+# Intermediate files
+duplicate_log="${logs_dir}/${lib}.mint.duplicates.log"
+filtered_file="${alignment_dir}/${lib}.filtered.bam"
+final_file="${alignment_dir}/${lib}.final.bam"
+final_alignment_stats="${alignment_stats_dir}/${lib}.final.alignment.stats.txt"
+
+# Remove duplicate reads:
+java -jar $EBROOTPICARD/picard.jar MarkDuplicates I=$filtered_file O=$final_file M=$duplicate_log REMOVE_DUPLICATES=TRUE VALIDATION_STRINGENCY=SILENT
+samtools index $final_file
+
+# # Remove precursor files
+# if [ -f $final_file ]; then
+#     rm ${filtered_file}
+#     rm ${filtered_file}.bai
+# fi
+
+echo 'Duplicate reads removed'
+
+# Compile alignment statistics on shifted reads:
+java -jar $EBROOTPICARD/picard.jar CollectAlignmentSummaryMetrics R=$genome_seq I=$final_file O=$final_alignment_stats
+echo 'Alignment stats compiled'
+##################################################################
+
 
 ################################################################################
 ###########################   Section 3: Find Peaks   ##########################
