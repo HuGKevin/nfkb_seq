@@ -219,7 +219,10 @@ java -jar $EBROOTPICARD/picard.jar CollectAlignmentSummaryMetrics R=$genome_seq 
 echo 'Alignment stats compiled'
 
 # Filter reads for quality, both ends properly mapped, and from principal assembly:
-samtools view -q 30 -f 0x2 -h -@ 16 $aligned_file chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY |
+samtools view -q 30 -f 0x2 -h -@ 16 $aligned_file \
+	 chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 \
+	 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 \
+	 chr21 chr22 chrX chrY |
     samtools sort -o $filtered_file -@ 16 -
 samtools index $filtered_file
 
@@ -291,7 +294,7 @@ echo 'Duplicate reads removed'
 
 # Call shift_reads.py to shift read cut sites:
 python /home/kh593/project/nfkb_seq/src/shift_reads2.py -o $shifted_file $nodup_file
-samtools sort -o $final_file -@ 16 $shifted_file
+samtools sort -o $final_file -@ 4 $shifted_file
 samtools index $final_file
 
 # Remove precursor files
@@ -307,7 +310,6 @@ java -jar $EBROOTPICARD/picard.jar CollectAlignmentSummaryMetrics R=$genome_seq 
 echo 'Shifted reads alignment stats compiled'
 ###########################################
 
-
 ################################################################################
 ###########################   Section 3: Find Peaks   ##########################
 ################################################################################
@@ -317,11 +319,10 @@ echo 'Shifted reads alignment stats compiled'
 
 #SBATCH --partition=general
 #SBATCH --job-name=peakcall_atac%a
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=15gb
+#SBATCH --cpus-per-task=8 --mem=15gb
 #SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/peakcall_atac%a.out
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/peakcall_atac%a.err
-#SBATCH --array=1-183
+#SBATCH --array=2-183
 
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Array ID: ${SLURM_JOB_ARRAY_ID}"
@@ -342,8 +343,8 @@ lib=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=4 'FNR == row {print $num}
 scratch_dir="/home/kh593/scratch60/nfkb_seq"
 reads_dir="${scratch_dir}/aligned_reads"
 peaks_dir="${scratch_dir}/peaks"
-fullset="/home/kh593/scratch60/nfkb_seq/aligned_reads/${lib}.final.bam"
-downsample="/home/kh593/scratch60/nfkb_seq/aligned_reads/${lib}.down.bam"
+fullset="${reads_dir}/${lib}.final.bam"
+downsample="${reads_dir}/${lib}.down.bam"
 npeakfile="${peaks_dir}/${lib}.narrowPeaks.gz"
 bpeakfile="${peaks_dir}/${lib}.broadPeaks.gz"
 gpeakfile="${peaks_dir}/${lib}.gappedPeaks.gz"
@@ -359,6 +360,8 @@ genome_sizes="/home/kh593/project/genomes/hg38/hg38_principal.chrom.sizes"
 
 # compute total reads
 total_reads=$(samtools view -@ 8 -c ${fullset})
+echo "Target depth: ${target_depth}"
+echo "Fullset size: ${total_reads}"
 
 # compute fraction of reads given an input read depth
 frac=$(awk -v down=$target_depth -v full=$total_reads 'BEGIN {frac=down/full;
@@ -370,6 +373,7 @@ then
     echo "${lib} doesn't exceed downsample threshold"
     exit 25
 else
+    echo "Downsample fraction: ${frac}"
     samtools view -@ 8 -bs $frac $fullset > $downsample
     samtools index $downsample
 fi
@@ -446,41 +450,16 @@ mv ${lib}_summits.bed ${peaks_dir}
 ########## MARKOV CLUSTERING ON CALLED PEAKS #######################
 
 ### Run MCL on each set of experiments
-mcl_dir="${scratch_dir}/results/MCL"
+mcl_dir="${scratch_dir}/mcl"
 atac_dir="${mcl_dir}/atac"
-mint_dir="${mcl_dir}/mint"
 
-gunzip /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/atac/*.gz
+gunzip /home/kh593/scratch60/nfkb_seq/peaks/atac/*.gz
 
-for file in /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/atac/*.narrowPeaks
-do
-    base=$(basename "${file}" .narrowPeaks)
-
-    sed -i -e "s/Peak_\([0-9]*\)/Peak_${base}_\1/g" ${file}
-done
-
-cat /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/atac/*.narrowPeaks > ${atac_dir}/mcl_compiled.bed
+cat /home/kh593/scratch60/nfkb_seq/peaks/atac/*.narrowPeaks > ${atac_dir}/mcl_compiled.bed
 
 bedSort ${atac_dir}/mcl_compiled.bed ${atac_dir}/mcl_compiled.bed
 awk '{print $0 >> $1".bed"}' ${atac_dir}/mcl_compiled.bed
 mv chr*.bed ${atac_dir}
-
-sbatch /home/kh593/project/nfkb_seq/src/mcl.sh
-
-gunzip /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/mint/*broadPeaks.gz
-
-for file in /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/mint/*.broadPeaks
-do
-    base=$(basename "${file}" .broadPeaks)
-
-    sed -i -e "s/Peak_\([0-9]*\)/Peak_${base}_\1/g" ${file}
-done
-
-cat /home/kh593/scratch60/nfkb_seq/results/peak_call/beds/mint/*.broadPeaks > ${mint_dir}/mcl_compiled.bed
-
-bedSort ${mint_dir}/mcl_compiled.bed ${mint_dir}/mcl_compiled.bed
-awk '{print $0 >> $1".bed"}' ${mint_dir}/mcl_compiled.bed
-mv chr*.bed ${mint_dir}
 
 sbatch /home/kh593/project/nfkb_seq/src/mcl.sh
 
