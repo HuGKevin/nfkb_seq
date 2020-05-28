@@ -46,6 +46,8 @@ trimmed_reads_dir="${scratch_dir}/trimmed_reads"
 alignment_dir="${scratch_dir}/aligned_reads"
 alignment_stats_dir="${scratch_dir}/alignment_stats"
 qc_stats_dir="${scratch_dir}/qc_stats"
+peak_dir="${scratch_dir}/peaks"
+mcl_dir="${scratch_dir}/mcl"
 
 # Create any missing directories:
 directories=( $base_dir $data_dir $src_dir $scratch_dir \
@@ -59,15 +61,12 @@ for directory in ${directories[@]}; do
     fi
 done
 
-# The sample table:
-sample_table="${base_dir}/data/file_index.csv"
-
 # Genome index:
 bt2_index="/gpfs/ysm/project/cotsapas/kh593/genomes/hg38/Bowtie2_index/hg38_index"
 genome_seq="/gpfs/ysm/project/cotsapas/kh593/genomes/hg38/hg38.fa"
 
 # Check that all essential components are present:
-essential_files=( $sample_table ${bt2_index}.1.bt2 $genome_seq \
+essential_files=( ${bt2_index}.1.bt2 $genome_seq \
                   ${src_dir}/pyadapter_trim.py ${src_dir}/shift_reads.py )
 for file in ${essential_files[@]}; do
   if [ ! -f $file ]; then
@@ -455,13 +454,28 @@ atac_dir="${mcl_dir}/atac"
 
 gunzip /home/kh593/scratch60/nfkb_seq/peaks/atac/*.gz
 
-cat /home/kh593/scratch60/nfkb_seq/peaks/atac/*.narrowPeaks > ${atac_dir}/mcl_compiled.bed
+echo -n > ${atac_dir}/mcl_compiled.bed
+
+while read donor expt stim lib
+do
+    if [ $donor == "donor" ] ||
+	   [ $donor == "TB5728" ] ||
+	   [ $donor == "TB0611" ] ||
+	   [ $donor == "TB6578" ]
+    then
+	echo "skipped ${lib}"
+	continue
+    else
+	cat ${peak_dir}/atac/${lib}.narrowPeaks >> ${atac_dir}/mcl_compiled.bed
+    fi
+    
+done < ~/project/nfkb_seq/data/atac_libs.tsv
 
 bedSort ${atac_dir}/mcl_compiled.bed ${atac_dir}/mcl_compiled.bed
 awk '{print $0 >> $1".bed"}' ${atac_dir}/mcl_compiled.bed
 mv chr*.bed ${atac_dir}
 
-sbatch /home/kh593/project/nfkb_seq/src/mcl.sh
+sbatch /home/kh593/project/nfkb_seq/src/mcl_atac.sh
 
 ### Bind cluster output from MCL
 sbatch /home/kh593/project/nfkb_seq/src/bind_clusters.sh
