@@ -528,14 +528,82 @@ module load R/3.6.1-foss-2018b
 index="/home/kh593/project/nfkb_seq/data/mcl_index.tsv"
 
 chr=$(awk -F"\t" -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $index)
-expt=$(awk -F"\t" -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $index)
 
-Rscript /home/kh593/project/nfkb_seq/src/bind_clusters.R ${expt} ${chr}
+Rscript /home/kh593/project/nfkb_seq/src/bind_clusters.R mint ${chr}
 
 echo "Job completed"
 
 #####################################################################
-### Generate binding profile for each DNA library
+
+######################## Analyze/QC clusters #######################
 Rscript /home/kh593/project/nfkb_seq/src/peak_matrix.R
 
 
+module load BEDTools/2.29.2-foss-2018b
+module load MCL/14.137-foss-2016b
+
+### Relevant directories
+project_dir="/home/kh593/project/nfkb_seq"
+scratch_dir="/home/kh593/scratch60/nfkb_seq"
+peak_dir="${scratch_dir}/peaks"
+mcl_dir="${scratch_dir}/mcl"
+analysis_dir="${scratch_dir}/analysis"
+overlap_dir="${analysis_dir}/overlaps"
+
+### Relevant input files
+atac_clusters="${mcl_dir}/final_atac.bed"
+mint_clusters="${mcl_dir}/final_mint.bed"
+index="${project_dir}/data/called_libs.tsv"
+
+### Relevant output files
+consensus_rep_output="${analysis_dir}/consensus_replications.txt"
+
+########## Compare individual library peaksets to clusters ###########
+echo -e "donor\texpt\tstim\tlib\tpeaks_reps" > ${consensus_rep_output}
+
+while read donor expt stim lib
+do
+    if [ $donor == "Donor" ] || [ $expt == "WCE" ]
+    then
+	continue
+    fi
+
+    if [ $expt == "H3K27ac" ]
+    then
+	cluster=${mint_clusters}
+	peaks="${peak_dir}/mint/${lib}.broadPeaks"
+    elif [ $expt == "ATAC" ]
+    then
+	cluster=${atac_clusters}
+	peaks="${peak_dir}/atac/${lib}.narrowPeaks"
+    fi
+        
+    ### Number of peaks replicated
+    intersections=$(intersectBed -a $cluster -b $peaks -u | wc | awk {'print $1'})
+    echo -e "${donor}\t${expt}\t${stim}\t${lib}\t${intersections}" >> ${consensus_rep_output} ## This is actually just a measure of peak density in the clusters, since every peak is represented in a cluster...
+
+    ### Also create a bed file that shows just which peaks have which intersections.
+    intersectBed -a $cluster -b $peaks -c > ${overlap_dir}/${lib}_count.bed # Last column is number of peaks from this lib in that cluster
+
+    ### Overlaps of peak replications
+    if [ $expt == "ATAC" ]
+    then
+	intersectBed -a $cluster -b $peaks -wo | cut -f1,2,3,7,8,9,17 | sort | uniq > ${overlap_dir}/${lib}_overlaps.bed
+    elif [ $expt == "H3K27ac" ]
+    then
+	intersectBed -a $cluster -b $peaks -wo | cut -f1,2,3,7,8,9,16 | sort | uniq > ${overlap_dir}/${lib}_overlaps.bed
+    fi
+	
+    bedSort ${overlap_dir}/${lib}_overlaps.bed ${overlap_dir}/${lib}_overlaps.bed
+
+    echo "${donor} ${expt} ${stim} ${lib}"
+
+done < ${index}
+
+########### Filter out clusters below a certain class ##############
+Rscript script goes here.
+
+
+################################################################################
+##########################   Section 5: Peak analysis  #########################
+################################################################################
