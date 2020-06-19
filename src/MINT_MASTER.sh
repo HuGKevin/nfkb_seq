@@ -158,7 +158,7 @@ echo 'Post-trim QC completed'
 #SBATCH --array=2-175
 
 echo "Job ID: ${SLURM_JOB_ID}"
-echo "Array ID: ${SLURM_JOB_ARRAY_ID}"
+echo "Array ID: ${SLURM_ARRAY_TASK_ID}"
 
 # Clear out environment of node and load conda environment
 module purge
@@ -305,7 +305,6 @@ java -jar $EBROOTPICARD/picard.jar CollectAlignmentSummaryMetrics R=$genome_seq 
 echo 'Alignment stats compiled'
 ##################################################################
 
-
 ################################################################################
 ###########################   Section 3: Find Peaks   ##########################
 ################################################################################
@@ -442,7 +441,11 @@ rm -f ${lib}_control_lambda.bdg
 mv ${lib}_summits.bed ${peaks_dir}
 ##############################################################
 
-### Run MCL on each set of experiments
+################################################################################
+##########################   Section 4: Cluster Peaks  #########################
+################################################################################
+
+############### Prepare files for MCL #######################
 mcl_dir="${scratch_dir}/mcl"
 mint_dir="${mcl_dir}/mint"
 
@@ -454,11 +457,63 @@ bedSort ${mint_dir}/mcl_compiled.bed ${mint_dir}/mcl_compiled.bed
 awk '{print $0 >> $1".bed"}' ${mint_dir}/mcl_compiled.bed
 mv chr*.bed ${mint_dir}
 
-sbatch /home/kh593/project/nfkb_seq/src/mcl.sh
+#####################################################################
 
-### Bind cluster output from MCL
+################### Run MCL on each chromosome ####################
+#!/bin/bash
+
+#SBATCH --partition=general
+#SBATCH --job-name=mcl_mint%a
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=64gb
+#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/mcl_mint%a.out
+#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/mcl_mint%a.err
+#SBATCH --array=1-24
+
+module purge
+module load MCL
+module load BEDTools
+
+if [ $SLURM_ARRAY_TASK_ID -eq 23 ]
+then
+    chr=X
+elif [ $SLURM_ARRAY_TASK_ID -eq 24 ]
+then
+    chr=Y
+else
+    chr=$SLURM_ARRAY_TASK_ID
+fi
+
+mcl_dir="/home/kh593/scratch60/nfkb_seq/mcl"
+file="${mcl_dir}/mint/chr${chr}.bed"
+trimmed="${mcl_dir}/mint/chr${chr}_trimmed.bed"
+intersection="${mcl_dir}/mint/chr${chr}_int.bed"
+abc="${mcl_dir}/mint/chr${chr}_input.abc"
+final="${mcl_dir}/mint/chr${chr}_clusters.txt"
+
+### Cut out excess columns
+cut -f1,2,3,4 $file > ${trimmed}
+
+### Intersect against self and report overlaps and size of overlap
+intersectBed -a ${trimmed} -b ${trimmed} -wo -sorted > ${intersection}
+
+### Remove unnecessary columns
+cut -f4,8,9 ${intersection} > ${abc}
+
+### Run MCL (for future note, can use -te for multithreading)
+mcl ${abc} --abc -o ${final} -te 10 
+
+### Remove intermediate files
+rm ${trimmed}
+rm ${intersection}
+rm ${abc}
+
+#####################################################################
+
+################## 
 sbatch /home/kh593/project/nfkb_seq/src/bind_clusters.sh
 
+#####################################################################
 ### Generate binding profile for each DNA library
 Rscript /home/kh593/project/nfkb_seq/src/peak_matrix.R
 
