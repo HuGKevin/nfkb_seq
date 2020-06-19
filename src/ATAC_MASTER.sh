@@ -310,7 +310,7 @@ echo 'Shifted reads alignment stats compiled'
 ###########################################
 
 ################################################################################
-###########################   Section 3: Find Peaks   ##########################
+###########################   Section 3: Call Peaks   ##########################
 ################################################################################
 
 ################## Downsample and call peaks #################
@@ -446,9 +446,11 @@ mv ${lib}_summits.bed ${peaks_dir}
 
 #####################################################
 
-########## MARKOV CLUSTERING ON CALLED PEAKS #######################
+################################################################################
+#########################   Section 4: Cluster Peaks  ##########################
+################################################################################
 
-### Run MCL on each set of experiments
+##################### Prepare files for MCL #######################
 mcl_dir="${scratch_dir}/mcl"
 atac_dir="${mcl_dir}/atac"
 
@@ -459,7 +461,7 @@ echo -n > ${atac_dir}/mcl_compiled.bed
 while read donor expt stim lib
 do
     if [ $donor == "donor" ] ||
-	   [ $donor == "TB5728" ] ||
+	   [ $donor == "TB5728" ] || ## Exclude tech-dev donors
 	   [ $donor == "TB0611" ] ||
 	   [ $donor == "TB6578" ]
     then
@@ -475,9 +477,56 @@ bedSort ${atac_dir}/mcl_compiled.bed ${atac_dir}/mcl_compiled.bed
 awk '{print $0 >> $1".bed"}' ${atac_dir}/mcl_compiled.bed
 mv chr*.bed ${atac_dir}
 
-sbatch /home/kh593/project/nfkb_seq/src/mcl_atac.sh
+################### Run MCL on each chromosome #####################
+#!/bin/bash
 
-### Bind cluster output from MCL
+#SBATCH --partition=general
+#SBATCH --job-name=mcl_atac%a
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=64gb
+#SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/mcl_atac%a.out
+#SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/mcl_atac%a.err
+#SBATCH --array=1-24
+
+module purge
+module load MCL
+module load BEDTools
+
+if [ $SLURM_ARRAY_TASK_ID -eq 23 ]
+then
+    chr=X
+elif [ $SLURM_ARRAY_TASK_ID -eq 24 ]
+then
+    chr=Y
+else
+    chr=$SLURM_ARRAY_TASK_ID
+fi
+
+mcl_dir="/home/kh593/scratch60/nfkb_seq/mcl"
+file="${mcl_dir}/atac/chr${chr}.bed"
+trimmed="${mcl_dir}/atac/chr${chr}_trimmed.bed"
+intersection="${mcl_dir}/atac/chr${chr}_int.bed"
+abc="${mcl_dir}/atac/chr${chr}_input.abc"
+final="${mcl_dir}/atac/chr${chr}_clusters.txt"
+
+### Cut out excess columns
+cut -f1,2,3,4 $file > ${trimmed}
+
+### Intersect against self and report overlaps and size of overlap
+intersectBed -a ${trimmed} -b ${trimmed} -wo -sorted > ${intersection}
+
+### Remove unnecessary columns
+cut -f4,8,9 ${intersection} > ${abc}
+
+### Run MCL (for future note, can use -te for multithreading)
+mcl ${abc} --abc -o ${final} -te 10 
+
+### Remove intermediate files
+rm ${trimmed}
+rm ${intersection}
+rm ${abc}
+
+############### Convert MCL output to BED file of clusters #################
 sbatch /home/kh593/project/nfkb_seq/src/bind_clusters.sh
 
 ### Generate binding profile for each DNA library
