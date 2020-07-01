@@ -13,11 +13,15 @@
 #   4. QC of trimmed reads with FastQC
 #   5. Alignment of trimmed reads with Bowtie2
 #   6. Compilation of alignment summary statistics by Picard tools
-#   7. Filtering to include only singly mapped reads mapped to primary assembly
+#   7. Filtering to include only high quality singly mapped reads mapped to primary assembly
 #   8. Filtering to remove optical duplicates
 #   9. Shift read cut sites with shift_reads.py
 #   10. Compilation of alignment summary statistics by Picard tools
-
+#   11. Downsample each library to 30 million reads
+#   12. Call peaks using the broadPeak settings in MACS2
+#   13. Process called peaks for parallel Markov Clustering
+#   14. Run Markov Clustering
+#   15. Convert MCL output to bed file and generate a presence/absence matrix
 
 ################################################################################
 #############################   Section 1: Setup   #############################
@@ -98,7 +102,7 @@ fi
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/trim_mint%a.err
 #SBATCH --array=2-175
 
-# Clear out environment of node and load conda environment
+# Set up environment
 module purge
 module load miniconda
 source activate atac_env
@@ -160,10 +164,8 @@ echo 'Post-trim QC completed'
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Array ID: ${SLURM_ARRAY_TASK_ID}"
 
-# Clear out environment of node and load conda environment
+# Set up environment
 module purge
-
-# Load additional necessary packages
 module load SAMtools
 module load Bowtie2
 module load picard
@@ -193,12 +195,6 @@ r2_pooled="/home/kh593/scratch60/nfkb_seq/pooled_reads/${lib}_R2_pooled.fastq.gz
 aligned_file="${alignment_dir}/${lib}.bam"
 alignment_stats_file="${alignment_stats_dir}/${lib}.alignment.stats.txt"
 filtered_file="${alignment_dir}/${lib}.filtered.bam"
-
-# if [ -f ${final_file} ]
-# then
-#     echo "Alignment already completed" 
-#     exit 4
-# fi
 
 # Pool R1s and R2s. 
 r1s=$(grep "${lib}" /home/kh593/project/nfkb_seq/data/mint_copa.tsv |
@@ -247,25 +243,23 @@ echo 'Reads filtered on quality, mapping, and source'
 
 #SBATCH --partition=general
 #SBATCH --job-name=dedup_stats_mint%a
-#SBATCH --cpus-per-task=1 --mem=50gb
+#SBATCH --cpus-per-task=1 --mem=35gb
 #SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/dedup_stats_mint%a.out
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/dedup_stats_mint%a.err
 #SBATCH --array=2-174
 
 echo "Job ID: ${SLURM_JOB_ID}"
-echo "Array ID: ${SLURM_JOB_ARRAY_ID}"
+echo "Array ID: ${SLURM_ARRAY_TASK_ID}"
 
-# Clear out environment of node and load conda environment
+# Set up environment
 module purge
-
-# Load additional necessary packages
 module load SAMtools
 module load Bowtie2
 module load picard
 
 python --version
 
-# File with metadata job array
+# Relevant files
 index_file="/home/kh593/project/nfkb_seq/data/mint_libs.tsv"
 bt2_index="/gpfs/ysm/project/cotsapas/kh593/genomes/hg38/Bowtie2_index/hg38_index"
 genome_seq="/gpfs/ysm/project/cotsapas/kh593/genomes/hg38/hg38.fa"
@@ -292,17 +286,12 @@ final_alignment_stats="${alignment_stats_dir}/${lib}.final.alignment.stats.txt"
 java -jar $EBROOTPICARD/picard.jar MarkDuplicates I=$filtered_file O=$final_file M=$duplicate_log REMOVE_DUPLICATES=TRUE VALIDATION_STRINGENCY=SILENT
 samtools index $final_file
 
-# # Remove precursor files
-# if [ -f $final_file ]; then
-#     rm ${filtered_file}
-#     rm ${filtered_file}.bai
-# fi
-
 echo 'Duplicate reads removed'
 
 # Compile alignment statistics on shifted reads:
 java -jar $EBROOTPICARD/picard.jar CollectAlignmentSummaryMetrics R=$genome_seq I=$final_file O=$final_alignment_stats
 echo 'Alignment stats compiled'
+
 ##################################################################
 
 ################################################################################
@@ -320,15 +309,17 @@ echo 'Alignment stats compiled'
 #SBATCH --array=2-174
 
 echo "Job ID: ${SLURM_JOB_ID}"
-echo "Array ID: ${SLURM_JOB_ARRAY_ID}"
+echo "Array ID: ${SLURM_ARRAY_TASK_ID}"
 
+# Set up environment
 module purge
 module load SAMtools
 module load MACS2
 
+# Relevant metadata
 index_file="/home/kh593/project/nfkb_seq/data/mint_libs.tsv"
 
-### job information
+# Extract relevant arguments from index
 donor=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $index_file)
 expt=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $index_file)
 stim=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num}' $index_file)
@@ -353,16 +344,16 @@ target_depth=30000000
 pval_thresh="0.01"
 genome_sizes="/home/kh593/project/genomes/hg38/hg38_principal.chrom.sizes"
 
-# compute total reads
+# Compute total reads
 total_reads=$(samtools view -@ 8 -c ${fullset})
 echo "Target depth: ${target_depth}"
 echo "Fullset size: ${total_reads}"
 
-# compute fraction of reads given an input read depth
+# Compute fraction of reads given an input read depth
 frac=$(awk -v down=$target_depth -v full=$total_reads 'BEGIN {frac=down/full;
 if (frac > 1) {print 1} else {print frac}}')	  
 
-# samtools view to downsample
+# Downsample reads
 if [ $frac -eq 1 ]
 then
     echo "${lib} doesn't exceed downsample threshold"
@@ -373,34 +364,34 @@ else
     samtools index $downsample
 fi
 
-# Peak call atac-seq peaks using narrowpeaks from MACS2
-### Call narrow peaks
+# Call peaks with MACS2
+## Call narrow peaks
 macs2 callpeak \
       -t $downsample -f BAMPE -n $lib -p $pval_thresh \
       --nomodel -B --SPMR --keep-dup all --call-summits
 
-### Call broad peaks
+## Call broad peaks
 macs2 callpeak \
       -t $downsample -f BAMPE -n $lib -p $pval_thresh \
       --nomodel --broad --keep-dup all
 
-### Sort peaks and compress them
-## narrow
+## Sort peaks and compress them
+### Narrow
 sort -k 8gr,8gr ${lib}_peaks.narrowPeak | \
     awk -v id=$lib 'BEGIN{OFS = "\t"}{$4 = id"_peak"NR ; print $0}' | \
     gzip -c > $npeakfile
 
-## broad
+### Broad
 sort -k 8gr,8gr ${lib}_peaks.broadPeak | \
     awk -v id=$lib 'BEGIN{OFS = "\t"}{$4 = id"_peak"NR ; print $0}' | \
     gzip -c > $bpeakfile
 
-## gapped
+### Gapped
 sort -k 8gr,8gr ${lib}_peaks.gappedPeak | \
     awk -v id=$lib 'BEGIN{OFS = "\t"}{$4 = id"_peak"NR ; print $0}' | \
     gzip -c > $gpeakfile
 
-### Convert peaks to signal tracks
+# Convert peaks to signal tracks
 ## Fold enrichment track
 macs2 bdgcmp -t ${lib}_treat_pileup.bdg \
       -c ${lib}_control_lambda.bdg \
@@ -411,14 +402,15 @@ macs2 bdgcmp -t ${lib}_treat_pileup.bdg \
       -c ${lib}_control_lambda.bdg \
       --o-prefix ${lib} -m ppois
 
-## Sort bedgraphs
+# Sort bedgraphs
 bedSort ${FE_bedgraph} ${FE_bedgraph}
 bedSort ${Pval_bedgraph} ${Pval_bedgraph}
 
-### Convert signal tracks to bigwigs
+# Convert signal tracks to bigwigs
 bedGraphToBigWig ${FE_bedgraph} $genome_sizes $FE_bigwig
 bedGraphToBigWig ${Pval_bedgraph} $genome_sizes $Pval_bigwig
 
+# Remove bedgraphs if bigwig generated
 if [ -f "${FE_bigwig}" ] 
 then
     rm -f ${FE_bedgraph}
@@ -429,7 +421,7 @@ then
     rm -f ${Pval_bedgraph}
 fi
 
-### Remove unnecessary files
+# Remove unnecessary files
 rm -f ${lib}_peaks.narrowPeak
 rm -f ${lib}_peaks.broadPeak
 rm -f ${lib}_peaks.gappedPeak
@@ -437,8 +429,9 @@ rm -f ${lib}_peaks.xls
 rm -f ${lib}_treat_pileup.bdg
 rm -f ${lib}_control_lambda.bdg
 
-### Move summits to peak dir
+# Move summits to peak dir
 mv ${lib}_summits.bed ${peaks_dir}
+
 ##############################################################
 
 ################################################################################
@@ -449,10 +442,11 @@ mv ${lib}_summits.bed ${peaks_dir}
 mcl_dir="${scratch_dir}/mcl"
 mint_dir="${mcl_dir}/mint"
 
+# Combine all peaks into a single file
 gunzip /home/kh593/scratch60/nfkb_seq/peaks/mint/*.gz
-
 cat /home/kh593/scratch60/nfkb_seq/peaks/mint/*.broadPeaks > ${mint_dir}/mcl_compiled.bed
 
+# Split peaks by chromosome to make MCL parallel
 bedSort ${mint_dir}/mcl_compiled.bed ${mint_dir}/mcl_compiled.bed
 awk '{print $0 >> $1".bed"}' ${mint_dir}/mcl_compiled.bed
 mv chr*.bed ${mint_dir}
@@ -470,6 +464,7 @@ mv chr*.bed ${mint_dir}
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/mcl_mint%a.err
 #SBATCH --array=1-24
 
+# Set up environment
 module purge
 module load MCL
 module load BEDTools
@@ -484,6 +479,7 @@ else
     chr=$SLURM_ARRAY_TASK_ID
 fi
 
+# Intermediate directories and files
 mcl_dir="/home/kh593/scratch60/nfkb_seq/mcl"
 file="${mcl_dir}/mint/chr${chr}.bed"
 trimmed="${mcl_dir}/mint/chr${chr}_trimmed.bed"
@@ -491,19 +487,19 @@ intersection="${mcl_dir}/mint/chr${chr}_int.bed"
 abc="${mcl_dir}/mint/chr${chr}_input.abc"
 final="${mcl_dir}/mint/chr${chr}_clusters.txt"
 
-### Cut out excess columns
+# Cut out excess columns
 cut -f1,2,3,4 $file > ${trimmed}
 
-### Intersect against self and report overlaps and size of overlap
+# Intersect against self and report overlaps and size of overlap
 intersectBed -a ${trimmed} -b ${trimmed} -wo -sorted > ${intersection}
 
-### Remove unnecessary columns
+# Remove unnecessary columns
 cut -f4,8,9 ${intersection} > ${abc}
 
-### Run MCL (for future note, can use -te for multithreading)
+# Run MCL (for future note, can use -te for multithreading)
 mcl ${abc} --abc -o ${final} -te 10 
 
-### Remove intermediate files
+# Remove intermediate files
 rm ${trimmed}
 rm ${intersection}
 rm ${abc}
@@ -514,15 +510,15 @@ rm ${abc}
 #!/bin/bash
 # Usage: sbatch bind_clusters.sh
 
-#SBATCH --job-name=bind_clusters%a
+#SBATCH --job-name=bind_mint_clusters%a
 #SBATCH --partition=general
 #SBATCH --mem=25gb --cpus-per-task=1
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/bind_clusters%a.err
 #SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/bind_clusters%a.out
 #SBATCH --array=1-24
 
+# Set up environment
 module purge
-
 module load R/3.6.1-foss-2018b
 
 index="/home/kh593/project/nfkb_seq/data/mcl_index.tsv"
@@ -535,14 +531,17 @@ echo "Job completed"
 
 #####################################################################
 
+################################################################################
+########################   Section 5: Cluster Analysis  ########################
+################################################################################
+
 ######################## Analyze/QC clusters #######################
-Rscript /home/kh593/project/nfkb_seq/src/peak_matrix.R
 
-
+# Relevant libraries
 module load BEDTools/2.29.2-foss-2018b
 module load MCL/14.137-foss-2016b
 
-### Relevant directories
+# Relevant directories
 project_dir="/home/kh593/project/nfkb_seq"
 scratch_dir="/home/kh593/scratch60/nfkb_seq"
 peak_dir="${scratch_dir}/peaks"
@@ -550,15 +549,15 @@ mcl_dir="${scratch_dir}/mcl"
 analysis_dir="${scratch_dir}/analysis"
 overlap_dir="${analysis_dir}/overlaps"
 
-### Relevant input files
+# Relevant input files
 atac_clusters="${mcl_dir}/final_atac.bed"
 mint_clusters="${mcl_dir}/final_mint.bed"
 index="${project_dir}/data/called_libs.tsv"
 
-### Relevant output files
+# Relevant output files
 consensus_rep_output="${analysis_dir}/consensus_replications.txt"
 
-########## Compare individual library peaksets to clusters ###########
+# Compare individual library peaksets to clusters
 echo -e "donor\texpt\tstim\tlib\tpeaks_reps" > ${consensus_rep_output}
 
 while read donor expt stim lib
@@ -582,7 +581,7 @@ do
     intersections=$(intersectBed -a $cluster -b $peaks -u | wc | awk {'print $1'})
     echo -e "${donor}\t${expt}\t${stim}\t${lib}\t${intersections}" >> ${consensus_rep_output} ## This is actually just a measure of peak density in the clusters, since every peak is represented in a cluster...
 
-    ### Also create a bed file that shows just which peaks have which intersections.
+    ### Also create a bed file that shows for each cluster how many peaks overlap it in each library. 
     intersectBed -a $cluster -b $peaks -c > ${overlap_dir}/${lib}_count.bed # Last column is number of peaks from this lib in that cluster
 
     ### Overlaps of peak replications
@@ -600,10 +599,11 @@ do
 
 done < ${index}
 
-########### Filter out clusters below a certain class ##############
-Rscript script goes here.
+# Generate presence/absence matrix on MCL clusters
+Rscript /home/kh593/project/nfkb_seq/src/peak_matrix.R
+
+# Filter out clusters below a certain class
+Still working on this...
 
 
-################################################################################
-##########################   Section 5: Peak analysis  #########################
-################################################################################
+
