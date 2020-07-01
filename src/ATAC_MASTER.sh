@@ -11,12 +11,17 @@
 #   2. QC of raw reads with FastQC
 #   3. Adapter trimming with pyadapter_trim.py
 #   4. QC of trimmed reads with FastQC
-#   5. Alignment of trimmed reads with HISAT2
+#   5. Alignment of trimmed reads with Bowtie2
 #   6. Compilation of alignment summary statistics by Picard tools
-#   7. Filtering to include only singly mapped reads mapped to primary assembly
+#   7. Filtering to include only high quality singly mapped reads mapped to primary assembly
 #   8. Filtering to remove optical duplicates
 #   9. Shift read cut sites with shift_reads.py
 #   10. Compilation of alignment summary statistics by Picard tools
+#   11. Downsample each library to 30 million reads
+#   12. Call peaks using the narrowPeak settings in MACS2
+#   13. Process called peaks for parallel Markov Clustering
+#   14. Run Markov Clustering
+#   15. Convert MCL output to bed file and generate a presence/absence matrix
 
 ################################################################################
 #############################   Section 1: Setup   #############################
@@ -24,6 +29,7 @@
 
 # This section defines executable paths and locations of raw data. Any missing
 # output directories are created.
+# Most of this section exists as a legacy from Noah/Matt's code. It's not 100% necessary. 
 
 missing=0 # Stores whether any critical components are missing
 
@@ -81,12 +87,11 @@ if [ $missing = 1 ]; then
     exit -1
 fi
 
-
 ################################################################################
 ##########################   Section 2: Align Reads   ##########################
 ################################################################################
 
-# This section contains job array scripts for pre- and alignment steps
+# This section contains job array scripts for QC, pre-alignment processing, and alignment
 
 ######### QC AND TRIM ADAPTERS #########
 #!/bin/bash
@@ -96,9 +101,9 @@ fi
 #SBATCH --cpus-per-task=1 --mem=35gb
 #SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/trim_atac%a.out
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/trim_atac%a.err
-#SBATCH --array=386,418,528,562,619
+#SBATCH --array=2-1145
 
-# Clear out environment of node and load conda environment
+# Set up environment
 module purge
 module load miniconda
 source activate atac_env
@@ -108,7 +113,7 @@ python --version
 # File with metadata job array
 index_file=/home/kh593/project/nfkb_seq/data/atac_copa.tsv
 
-# Extract relevant arguments from the table
+# Extract relevant arguments from the metadata
 donor=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=1 'FNR == row {print $num}' $index_file)
 expt=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=2 'FNR == row {print $num}' $index_file)
 stim=$(awk -F'\t' -v row=${SLURM_ARRAY_TASK_ID} -v num=3 'FNR == row {print $num}' $index_file)
@@ -120,12 +125,8 @@ data_dir="/home/kh593/scratch60/nfkb_data/ATACseq"
 src_dir="/home/kh593/project/nfkb_seq/src"
 trimmed_reads_dir="/home/kh593/scratch60/nfkb_seq/trimmed_reads/atac"
 
-# Intermediate files
-fastq1_trim="${trimmed_reads_dir}/${copa}_R1.trim.fastq.gz"
-fastq2_trim="${trimmed_reads_dir}/${copa}_R2.trim.fastq.gz"
- 
 # Trim adapter sequences:
-python ${src_dir}/pyadapter_trim2.py -a ${data_dir}/${copa}_R1.fastq.gz -b ${data_dir}/${copa}_R2.fastq.gz
+python ${src_dir}/pyadapter_trim.py -a ${data_dir}/${copa}_R1.fastq.gz -b ${data_dir}/${copa}_R2.fastq.gz
 
 mv ${copa}_R1.trim.fastq.gz ${trimmed_reads_dir}
 mv ${copa}_R2.trim.fastq.gz ${trimmed_reads_dir}
@@ -138,7 +139,7 @@ module list
 #########################
 
 ### Below FastQC is optional
-# Perform QC testing on raw reads with FastQC:
+# Perform QC testing on raw reads with FastQC (multithreaded to 16 cores):
 fastqc ${data_dir}/${R1} ${data_dir}/${R2} --outdir=$pretrim_qc_dir/atac --threads=16
 
 echo 'Raw QC Completed'
@@ -153,15 +154,13 @@ echo 'Post-trim QC completed'
 
 #SBATCH --partition=general
 #SBATCH --job-name=pool_align_atac%a
-#SBATCH --cpus-per-task=16 --mem=7gb
+#SBATCH --cpus-per-task=16 --mem=20gb
 #SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/pool_align_atac%a.out
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/pool_align_atac%a.err
 #SBATCH --array=2-183
 
-# Clear out environment of node and load conda environment
+# Set up environment
 module purge
-
-# Load additional necessary packages
 module load SAMtools
 module load Bowtie2
 module load picard
@@ -201,13 +200,12 @@ r2s=$(grep "${lib}" /home/kh593/project/nfkb_seq/data/atac_copa.tsv |
 	  cut -f5 |
 	  sed "s/$/_R2.trim.fastq.gz/g" |
 	  sed "s/^/\/home\/kh593\/scratch60\/nfkb_seq\/trimmed_reads\/atac\//g")
-
 cat ${r1s} > ${r1_pooled}
 cat ${r2s} > ${r2_pooled}
 
 echo "${lib} Pooled"
 
-# Align reads with Bowtie2:
+# Align reads with Bowtie2
 bowtie2 -p 16 -x $bt2_index -1 ${r1_pooled} -2 ${r2_pooled} |
     samtools sort -o $aligned_file -@ 16 -
 samtools index $aligned_file
@@ -239,15 +237,13 @@ echo 'Reads filtered on quality, mapping, and source'
 
 #SBATCH --partition=general
 #SBATCH --job-name=dedup_stats_atac%a
-#SBATCH --cpus-per-task=4 --mem=45gb
+#SBATCH --cpus-per-task=8 --mem=30gb
 #SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/dedup_stats_atac%a.out
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/dedup_stats_atac%a.err
 #SBATCH --array=2-183
 
-# Clear out environment of node and load conda environment
+# Set up environment
 module purge
-
-# Load additional necessary packages
 module load SAMtools
 module load Bowtie2
 module load picard
@@ -279,15 +275,11 @@ shifted_file="${alignment_dir}/${lib}.shifted.bam"
 final_file="${alignment_dir}/${lib}.final.bam"
 final_alignment_stats="${alignment_stats_dir}/${lib}.final.alignment.stats.txt"
 
+echo $lib
+
 # Remove duplicate reads:
 java -jar $EBROOTPICARD/picard.jar MarkDuplicates I=$filtered_file O=$nodup_file M=$duplicate_log REMOVE_DUPLICATES=TRUE VALIDATION_STRINGENCY=SILENT
 samtools index $nodup_file
-
-# Remove precursor files
-if [ -f $nodup_file ]; then
-    rm ${filtered_file}
-    rm ${filtered_file}.bai
-fi
 
 echo 'Duplicate reads removed'
 
@@ -324,8 +316,9 @@ echo 'Shifted reads alignment stats compiled'
 #SBATCH --array=2-183
 
 echo "Job ID: ${SLURM_JOB_ID}"
-echo "Array ID: ${SLURM_JOB_ARRAY_ID}"
+echo "Array ID: ${SLURM_ARRAY_TASK_ID}"
 
+# Set up environment
 module purge
 module load SAMtools
 module load MACS2
@@ -357,16 +350,16 @@ target_depth=30000000
 pval_thresh="0.01"
 genome_sizes="/home/kh593/project/genomes/hg38/hg38_principal.chrom.sizes"
 
-# compute total reads
+# Compute total reads
 total_reads=$(samtools view -@ 8 -c ${fullset})
 echo "Target depth: ${target_depth}"
 echo "Fullset size: ${total_reads}"
 
-# compute fraction of reads given an input read depth
+# Compute fraction of reads given an input read depth
 frac=$(awk -v down=$target_depth -v full=$total_reads 'BEGIN {frac=down/full;
 if (frac > 1) {print 1} else {print frac}}')	  
 
-# samtools view to downsample
+# Downsample to depth if library is sufficiently deep
 if [ $frac -eq 1 ]
 then
     echo "${lib} doesn't exceed downsample threshold"
@@ -377,34 +370,34 @@ else
     samtools index $downsample
 fi
 
-# Peak call atac-seq peaks using narrowpeaks from MACS2
-### Call narrow peaks
+# Peak call atac-seq peaks MACS2
+## Call narrow peaks
 macs2 callpeak \
       -t $downsample -f BAMPE -n $lib -p $pval_thresh \
       --nomodel -B --SPMR --keep-dup all --call-summits
 
-### Call broad peaks
+## Call broad peaks
 macs2 callpeak \
       -t $downsample -f BAMPE -n $lib -p $pval_thresh \
       --nomodel --broad --keep-dup all
 
-### Sort peaks and compress them
-## narrow
+## Sort peaks and compress them
+### Narrow
 sort -k 8gr,8gr ${lib}_peaks.narrowPeak | \
     awk -v id=$lib 'BEGIN{OFS = "\t"}{$4 = id"_peak"NR ; print $0}' | \
     gzip -c > $npeakfile
 
-## broad
+### Broad
 sort -k 8gr,8gr ${lib}_peaks.broadPeak | \
     awk -v id=$lib 'BEGIN{OFS = "\t"}{$4 = id"_peak"NR ; print $0}' | \
     gzip -c > $bpeakfile
 
-## gapped
+### Gapped
 sort -k 8gr,8gr ${lib}_peaks.gappedPeak | \
     awk -v id=$lib 'BEGIN{OFS = "\t"}{$4 = id"_peak"NR ; print $0}' | \
     gzip -c > $gpeakfile
 
-### Convert peaks to signal tracks
+# Convert peaks to signal tracks
 ## Fold enrichment track
 macs2 bdgcmp -t ${lib}_treat_pileup.bdg \
       -c ${lib}_control_lambda.bdg \
@@ -415,14 +408,15 @@ macs2 bdgcmp -t ${lib}_treat_pileup.bdg \
       -c ${lib}_control_lambda.bdg \
       --o-prefix ${lib} -m ppois
 
-## Sort bedgraphs
+# Sort bedgraphs
 bedSort ${FE_bedgraph} ${FE_bedgraph}
 bedSort ${Pval_bedgraph} ${Pval_bedgraph}
 
-### Convert signal tracks to bigwigs
+# Convert signal tracks to bigwigs
 bedGraphToBigWig ${FE_bedgraph} $genome_sizes $FE_bigwig
 bedGraphToBigWig ${Pval_bedgraph} $genome_sizes $Pval_bigwig
 
+# Remove precursor files if bigwig conversion successful
 if [ -f "${FE_bigwig}" ] 
 then
     rm -f ${FE_bedgraph}
@@ -433,7 +427,7 @@ then
     rm -f ${Pval_bedgraph}
 fi
 
-### Remove unnecessary files
+# Remove unnecessary files
 rm -f ${lib}_peaks.narrowPeak
 rm -f ${lib}_peaks.broadPeak
 rm -f ${lib}_peaks.gappedPeak
@@ -441,7 +435,7 @@ rm -f ${lib}_peaks.xls
 rm -f ${lib}_treat_pileup.bdg
 rm -f ${lib}_control_lambda.bdg
 
-### Move summits to peak dir
+# Move summits to peak dir
 mv ${lib}_summits.bed ${peaks_dir}
 
 #####################################################
@@ -454,14 +448,15 @@ mv ${lib}_summits.bed ${peaks_dir}
 mcl_dir="${scratch_dir}/mcl"
 atac_dir="${mcl_dir}/atac"
 
-gunzip /home/kh593/scratch60/nfkb_seq/peaks/atac/*.gz
+# Combine all peaks into a single file
+gunzip /home/kh593/scratch60/nfkb_seq/peaks/atac/*.gz 
+echo -n > ${atac_dir}/mcl_compiled.bed 
 
-echo -n > ${atac_dir}/mcl_compiled.bed
-
+## Exclude tech-dev donors from clustering
 while read donor expt stim lib
 do
     if [ $donor == "donor" ] ||
-	   [ $donor == "TB5728" ] || ## Exclude tech-dev donors
+	   [ $donor == "TB5728" ] || 
 	   [ $donor == "TB0611" ] ||
 	   [ $donor == "TB6578" ]
     then
@@ -473,8 +468,9 @@ do
     
 done < ~/project/nfkb_seq/data/atac_libs.tsv
 
-bedSort ${atac_dir}/mcl_compiled.bed ${atac_dir}/mcl_compiled.bed
-awk '{print $0 >> $1".bed"}' ${atac_dir}/mcl_compiled.bed
+# Split filtered peaks by chromosome to make MCL parallel.
+bedSort ${atac_dir}/mcl_compiled.bed ${atac_dir}/mcl_compiled.bed 
+awk '{print $0 >> $1".bed"}' ${atac_dir}/mcl_compiled.bed 
 mv chr*.bed ${atac_dir}
 
 ########################################################################
@@ -484,12 +480,12 @@ mv chr*.bed ${atac_dir}
 
 #SBATCH --partition=general
 #SBATCH --job-name=mcl_atac%a
-#SBATCH --cpus-per-task=10
-#SBATCH --mem=64gb
+#SBATCH --cpus-per-task=10 --mem=64gb
 #SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/mcl_atac%a.out
 #SBATCH -e /home/kh593/scratch60/nfkb_seq/logs/mcl_atac%a.err
 #SBATCH --array=1-24
 
+# Set up environment
 module purge
 module load MCL
 module load BEDTools
@@ -541,8 +537,8 @@ rm ${abc}
 #SBATCH -o /home/kh593/scratch60/nfkb_seq/logs/bind_clusters%a.out
 #SBATCH --array=1-24
 
+# Set up environment
 module purge
-
 module load R/3.6.1-foss-2018b
 
 index="/home/kh593/project/nfkb_seq/data/mcl_index.tsv"
