@@ -1,6 +1,6 @@
 ### Script for analyses on downsample experiments.
 
-setwd("/home/kh593/scratch60/nfkb_seq/results")
+setwd("/home/kh593/scratch60/nfkb_seq/")
 
 library(dplyr)
 library(GenomicRanges)
@@ -10,11 +10,11 @@ library(tools)
 
 consensus.beds.dir <- "analysis/overlaps"
 
-files <- list.files(consensus.beds.dir, pattern = "*_count.bed") # All overlap files in directory.
-index <- fread("/home/kh593/project/nfkb_seq/data/peakcall_array.tsv",
+index <- fread("/home/kh593/project/nfkb_seq/data/called_libs.tsv",
                col.names = c("donor", "expt", "stim", "lib")) # List of libraries and their metadata
 atac_files <- index %>%
-    filter(expt == "ATAC")
+    filter(expt == "ATAC") %>%
+    filter(!(donor %in% c("TB0611", "TB5728", "TB6578")))
 mint_files <- index %>%
     filter(expt == "H3K27ac")
 
@@ -33,7 +33,7 @@ for(i in 1:nrow(atac_files)){
     mcols(atac_base)[name] <- mcols(data)$count
 }
 
-write.table(atac_base, "analysis/atac_count_matrix.bed", row.names = FALSE, quote = FALSE)
+write.table(atac_base, gzfile("analysis/atac_count_matrix.bed.gz"), row.names = FALSE, quote = FALSE)
 
 ### Do the same for mintchip
 mint_base <- sort(granges(toGRanges(fread(paste0(consensus.beds.dir, "/", mint_files$lib[1], "_count.bed")))))
@@ -48,7 +48,7 @@ for(i in 1:nrow(mint_files)){
     mcols(mint_base)[name] <- mcols(data)$count
 }
 
-write.table(mint_base, "analysis/mint_count_matrix.bed", row.names = FALSE, quote = FALSE)
+write.table(mint_base, gzfile("analysis/mint_count_matrix.bed"), row.names = FALSE, quote = FALSE)
 
 ## ### Correlation between downsampled and consensus peaksets
 ## ## Load in the data

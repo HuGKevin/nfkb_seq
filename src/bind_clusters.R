@@ -4,7 +4,7 @@ args <- commandArgs(trailingOnly = TRUE)
 expt <- args[1]
 chr <- args[2]
 
-setwd(paste0("/home/kh593/scratch60/nfkb_seq/results/MCL/", expt))
+setwd(paste0("/home/kh593/scratch60/nfkb_seq/mcl/", expt))
 
 library(IRanges)
 library(GenomicRanges)
